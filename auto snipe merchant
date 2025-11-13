@@ -1,0 +1,232 @@
+setfpscap(5)
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+local TOP_PRIORITY_ITEMS = {
+    "Fragrama and Chocrama",
+    "Los Spaghettis", 
+    "Los Puggies",
+}
+
+getgenv().BRAINROT_AUTO_BUY_CONFIG = getgenv().BRAINROT_AUTO_BUY_CONFIG or {
+    ["Los Spaghettis"] = true,
+    ["Fragrama and Chocrama"] = true,
+    ["Los Puggies"] = true,
+}
+
+local Net = require(ReplicatedStorage.Packages.Net)
+local MerchantData = require(ReplicatedStorage.Datas.MerchantData)
+local SetFocused = Net:RemoteEvent("MerchantService/SetFocused")
+local Buy = Net:RemoteFunction("MerchantService/Buy")
+local MERCHANT_ID = "2298b248-44dd-4a34-bbfe-e1174e8ae1b4"
+local workspace = game:GetService("Workspace")
+local GetServerTimeNow = workspace.GetServerTimeNow
+local GetAttribute = ReplicatedStorage.GetAttribute
+local tick = tick
+local task_wait = task.wait
+local task_spawn = task.spawn
+local task_defer = task.defer
+local string_format = string.format
+local string_sub = string.sub
+local string_find = string.find
+local pcall = pcall
+local DateTime_fromUnixTimestamp = DateTime.fromUnixTimestamp
+local itemToIndex = {}
+local itemToAttrPrefix = {}
+local topPrioritySet = {}
+
+for index, itemData in ipairs(MerchantData.Brainrots) do
+    local itemName = itemData.Brainrot
+    itemToIndex[itemName] = index
+    
+    local sanitized = string.gsub(itemData.StockKey or "", "%s", "_")
+    itemToAttrPrefix[itemName] = "StockEvent_" .. sanitized .. "-"
+end
+
+-- precache priority itm
+for i, itemName in ipairs(TOP_PRIORITY_ITEMS) do
+    topPrioritySet[itemName] = i
+end
+
+local LOCK = false
+local lastBuy = 0
+local bought = {}
+local currentSlot = ""
+
+local slotCache = {}
+local lastSlotUpdate = 0
+
+local function updateTimeSlot()
+    local now = GetServerTimeNow(workspace)
+    
+    -- Cache slot for 1 second (no need to recalculate constantly)
+    if now - lastSlotUpdate < 1 and currentSlot ~= "" then
+        return currentSlot
+    end
+    
+    lastSlotUpdate = now
+    local dt = DateTime_fromUnixTimestamp(now)
+    
+    local minute = tonumber(dt:FormatUniversalTime("mm", "en-us")) or 0
+    local slot = minute < 30 and "00" or "30"
+    
+    currentSlot = string_format("%s%s%s-%s%s",
+        dt:FormatUniversalTime("YYYY", "en-us"),
+        dt:FormatUniversalTime("MM", "en-us"),
+        dt:FormatUniversalTime("DD", "en-us"),
+        dt:FormatUniversalTime("HH", "en-us"),
+        slot
+    )
+    
+    return currentSlot
+end
+
+local stockCache = {}
+local lastStockCheck = {}
+
+local function getStock(itemName)
+    local now = tick()
+    local lastCheck = lastStockCheck[itemName] or 0
+    
+    -- Cache stock for 0.1s (multiple calls during same frame)
+    if now - lastCheck < 0.1 then
+        return stockCache[itemName] or 0
+    end
+    
+    local prefix = itemToAttrPrefix[itemName]
+    if not prefix then return 0 end
+    
+    local stock = GetAttribute(ReplicatedStorage, prefix .. currentSlot) or 0
+    stockCache[itemName] = stock
+    lastStockCheck[itemName] = now
+    
+    return stock
+end
+
+local focusDebounce = 0
+
+local function fastBuy(itemName)
+    local now = tick()
+    local waitTime = 10 - (now - lastBuy)
+    
+    if waitTime > 0 then
+        task_wait(waitTime)
+        now = tick()  -- Update time after wait
+    end
+    
+    lastBuy = now
+    local index = itemToIndex[itemName]
+    
+    -- Fire SetFocused ONLY if not recently fired (avoid spam)
+    if now - focusDebounce > 0.5 then
+        focusDebounce = now
+        task_defer(function()
+            SetFocused:FireServer(MERCHANT_ID, true)
+        end)
+    end
+    
+    -- Direct purchase with minimal error handling
+    local success, result = pcall(Buy.InvokeServer, Buy, MERCHANT_ID, index)
+    
+    if success and result == true then
+        print(string_format("worked!! %s", itemName))
+        return true
+    else
+        print(string_format("failed out of stock?? %s", itemName))
+        return false
+    end
+end
+
+-- buy firsst
+local function executeBuy()
+    if LOCK then return end
+    LOCK = true
+    
+    for i = 1, #TOP_PRIORITY_ITEMS do
+        local itemName = TOP_PRIORITY_ITEMS[i]
+        
+        if not bought[itemName] then
+            local stock = getStock(itemName)
+            
+            if stock > 0 then
+                print(string_format(" %s [%d]", itemName, stock))
+                
+                if fastBuy(itemName) then
+                    bought[itemName] = true
+                end
+                
+                LOCK = false
+                return  -- INSTANT EXIT
+            end
+        end
+    end
+    
+    LOCK = false
+end
+
+updateTimeSlot()
+
+local PATTERN = "StockEvent_"
+local PATTERN_LEN = 11
+local lastAttrTime = {}
+
+ReplicatedStorage.AttributeChanged:Connect(function(attrName)
+    -- FASTEST PATH: Inline pattern check
+    if string_sub(attrName, 1, PATTERN_LEN) ~= PATTERN then return end
+    
+    -- Debounce duplicate attribute fires (Roblox bug)
+    local now = tick()
+    local lastFire = lastAttrTime[attrName] or 0
+    if now - lastFire < 0.05 then return end
+    lastAttrTime[attrName] = now
+    
+    -- Only process if matches current slot (avoid old attribute changes)
+    if not string_find(attrName, currentSlot, 1, true) then return end
+    
+    -- INSTANT execution - no thread spawning overhead
+    if not LOCK then
+        executeBuy()
+    end
+end)
+local lastCheck = 0
+local checkInterval = 0.1  -- 100ms polling (faster than 5 FPS frame time)
+
+task_spawn(function()
+    while true do
+        task_wait(checkInterval)
+        
+        local now = GetServerTimeNow(workspace)
+        if now - lastCheck >= 1 then
+            lastCheck = now
+            local oldSlot = currentSlot
+            updateTimeSlot()
+            
+            if currentSlot ~= oldSlot then
+                print(string_format(" RESTOCK: %s", currentSlot))
+                
+                -- Clear state
+                bought = {}
+                stockCache = {}
+                lastStockCheck = {}
+                LOCK = false
+                
+                -- Immediate buy attempt
+                task_defer(executeBuy)
+            end
+        end
+    end
+end)
+
+--change to 0.01 if this slowwwww
+task_spawn(function()
+    task_wait(0.03)  -- 30ms - reduced from 50ms for faster initial response
+    
+    -- Pre-warm stock cache
+    for _, itemName in ipairs(TOP_PRIORITY_ITEMS) do
+        getStock(itemName)
+    end
+    
+    -- Immediate first buy attempt
+    executeBuy()
+    print("if u see this it working")
+end)
