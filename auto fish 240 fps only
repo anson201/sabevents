@@ -1,0 +1,693 @@
+-- FOR 60+ FPS ONLY DO NOT USE IF ITS UNDER 60
+-- ALL TIMINGS WILL BE OFF IF UNDER 60 FPS
+setfpscap(240)
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local backpack = player:WaitForChild("Backpack")
+
+local errorLog = {}
+local maxLogEntries = 50
+local errorCount = 0
+
+local function logError(location, errorMsg)
+    errorCount = errorCount + 1
+    local entry = {
+        time = os.date("%H:%M:%S"),
+        location = location,
+        error = tostring(errorMsg),
+        count = errorCount
+    }
+    table.insert(errorLog, 1, entry)
+    if #errorLog > maxLogEntries then
+        table.remove(errorLog)
+    end
+    warn(string.format("[ERROR #%d] %s in %s: %s", errorCount, entry.time, location, errorMsg))
+end
+
+local function getErrorLog()
+    if #errorLog == 0 then
+        return
+    end
+    for i, entry in ipairs(errorLog) do
+        warn(string.format("#%d [%s] %s: %s", entry.count, entry.time, entry.location, entry.error))
+    end
+end
+
+local fishingLog = {}
+local maxFishingLogEntries = 100
+
+local function logFishingAttempt(luckMultiplier, minigameDuration, clicks, cps, hits, total, caught)
+    local entry = {
+        time = os.date("%H:%M:%S"),
+        luck = luckMultiplier,
+        duration = minigameDuration,
+        clicks = clicks,
+        cps = cps,
+        hits = hits,
+        total = total,
+        caught = caught,
+        efficiency = (hits / math.max(clicks, 1)) * 100
+    }
+    table.insert(fishingLog, 1, entry)
+    if #fishingLog > maxFishingLogEntries then
+        table.remove(fishingLog)
+    end
+end
+
+local function getFishingLog()
+    if #fishingLog == 0 then
+        return
+    end
+    for i, entry in ipairs(fishingLog) do
+        local result = entry.caught and "CAUGHT" or "MISSED"
+        warn(string.format("%s | %s | %.2fx | %.2fs | %.1f | %d/%d | %.1f%%",
+            entry.time, result, entry.luck, entry.duration, entry.cps,
+            entry.hits, entry.total, entry.efficiency))
+    end
+end
+
+local function getFishingStats()
+    if #fishingLog == 0 then
+        return
+    end
+    local totalAttempts = #fishingLog
+    local caught = 0
+    local totalLuck = 0
+    local totalCPS = 0
+    local totalEfficiency = 0
+    local totalTime = 0
+    for _, entry in ipairs(fishingLog) do
+        if entry.caught then caught = caught + 1 end
+        totalLuck = totalLuck + entry.luck
+        totalCPS = totalCPS + entry.cps
+        totalEfficiency = totalEfficiency + entry.efficiency
+        totalTime = totalTime + entry.duration
+    end
+    local catchRate = (caught / totalAttempts) * 100
+    local avgLuck = totalLuck / totalAttempts
+    local avgCPS = totalCPS / totalAttempts
+    local avgEfficiency = totalEfficiency / totalAttempts
+    local avgTime = totalTime / totalAttempts
+    local sessionTime = (tick() - sessionStartTime) / 3600
+    local fishPerHour = sessionTime > 0 and (caught / sessionTime) or 0
+    warn(string.format("Session Time: %.1f minutes", (tick() - sessionStartTime) / 60))
+    warn(string.format("Total Attempts: %d", totalAttempts))
+    warn(string.format("Caught: %d (%.1f%%)", caught, catchRate))
+    warn(string.format("Missed: %d (%.1f%%)", totalAttempts - caught, 100 - catchRate))
+    warn(string.format("Fish/Hour: %.1f", fishPerHour))
+    warn(string.format("Average Luck: %.2fx", avgLuck))
+    warn(string.format("Average CPS: %.1f", avgCPS))
+    warn(string.format("Average Time: %.1fs", avgTime))
+    warn(string.format("Average Efficiency: %.1f%%", avgEfficiency))
+end
+
+_G.getErrors = getErrorLog
+_G.clearErrors = function()
+    errorLog = {}
+    errorCount = 0
+end
+_G.getFishingLog = getFishingLog
+_G.getFishingStats = getFishingStats
+_G.clearFishingLog = function()
+    fishingLog = {}
+end
+
+local function findFishingRod()
+    if character then
+        for _, tool in pairs(character:GetChildren()) do
+            if tool:IsA("Tool") then
+                local name = tool.Name:lower()
+                if name:find("rod") or name:find("fish") or tool:GetAttribute("EquippedFishingRod") then
+                    return tool, true
+                end
+            end
+        end
+    end
+    for _, tool in pairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") then
+            local name = tool.Name:lower()
+            if name:find("rod") or name:find("fish") or tool:GetAttribute("EquippedFishingRod") then
+                return tool, false
+            end
+        end
+    end
+    return nil, false
+end
+
+local function listAllTools()
+    if character then
+        for _, tool in pairs(character:GetChildren()) do
+            if tool:IsA("Tool") then
+                warn(tool.Name)
+            end
+        end
+    end
+    for _, tool in pairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") then
+            warn(tool.Name)
+        end
+    end
+end
+
+local Net, FishingCast, FishingMinigameClick, FishingCancel
+
+local function initializeRemotes()
+    for attempt = 1, 10 do
+        local success, err = pcall(function()
+            Net = require(ReplicatedStorage.Packages.Net)
+            FishingCast = Net:RemoteEvent("FishingRod.Cast")
+            FishingMinigameClick = Net:RemoteEvent("FishingRod.MinigameClick")
+            FishingCancel = Net:RemoteEvent("FishingRod.Cancel")
+        end)
+        if success then
+            return true
+        else
+            logError("initializeRemotes", err)
+            if attempt < 10 then
+                task.wait(2)
+            end
+        end
+    end
+    return false
+end
+
+if not initializeRemotes() then
+    error("CRITICAL: Failed to initialize remotes")
+end
+
+local TARGET_LUCK = 1.5
+local LUCK_CYCLE = 1.0
+local FIRST_PEAK_TIME = 0.425
+local TOTAL_START_COMP = 0.650
+local PERFECT_HOLD_DURATION = 0.07500
+local CLICK_INTERVAL = 0.0345
+local CLICKS_PER_BURST = 2
+local BURST_INTERVAL = 0.0172
+local YIELD_EVERY_N_CLICKS = 12
+local MAX_CLICKS_PER_MINIGAME = 6000
+local REEQUIP_CHECK_INTERVAL = 2.0
+local INSTANT_EQUIP_RETRY = 1.0
+local MAX_EQUIP_ATTEMPTS = 30
+local MINIGAME_BUFFER = 0.4
+local CAST_COMPLETE_WAIT = 3.5
+local COOLDOWN_CHECK_WAIT = 1.0
+local BITE_WAIT = 0.8
+local MIN_YIELD_TIME = 0.03
+local MINIGAME_POLL_INTERVAL = 0.15
+local MINIGAME_TIMEOUT = 30.0
+local ACTION_VERIFY_ATTEMPTS = 4
+local ACTION_VERIFY_DELAY = 0.2
+
+local lastCastTime = 0
+local STUCK_TIMEOUT = 30
+
+local function checkIfStuck()
+    local timeSinceLastCast = tick() - lastCastTime
+    if timeSinceLastCast > STUCK_TIMEOUT and isFishing then
+        isMinigame = false
+        isFishing = false
+        task.spawn(function()
+            task.wait(1)
+            local rod = findFishingRod()
+            if rod then
+                pcall(function()
+                    rod:Deactivate()
+                end)
+                task.wait(0.5)
+                for i = 1, 10 do
+                    if equipRod() then
+                        isFishing = true
+                        lastCastTime = tick()
+                        break
+                    end
+                    task.wait(0.5)
+                end
+            end
+        end)
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(10)
+        checkIfStuck()
+    end
+end)
+
+local isFishing = false
+local isMinigame = false
+local lastClickTime = 0
+local clickCount = 0
+local yieldCounter = 0
+local rodMonitored = nil
+local lastRodCheck = 0
+local equipAttempts = 0
+
+local totalCasts = 0
+local successfulCasts = 0
+local totalFishCaught = 0
+local missedFish = 0
+local minigameCount = 0
+local avgClicksPerMinigame = 0
+local timingErrors = {}
+local avgTimingError = 0
+local sessionStartTime = tick()
+local minigameStartTime = 0
+local lastCastLuck = 0
+local lastMinigameCheck = 0
+
+local function verifyAttributeChange(rod, attributeName, expectedValue, maxAttempts)
+    maxAttempts = maxAttempts or ACTION_VERIFY_ATTEMPTS
+    for attempt = 1, maxAttempts do
+        local success, value = pcall(function()
+            return rod:GetAttribute(attributeName)
+        end)
+        if success then
+            if expectedValue == nil or value == expectedValue then
+                return true
+            end
+        end
+        if attempt < maxAttempts then
+            task.wait(ACTION_VERIFY_DELAY)
+        end
+    end
+    return false
+end
+
+function equipRod()
+    local rod, equipped = findFishingRod()
+    if not rod then
+        if equipAttempts % 10 == 0 then
+            if equipAttempts == 10 then
+                listAllTools()
+            end
+        end
+        equipAttempts = equipAttempts + 1
+        return false
+    end
+    if equipped then
+        equipAttempts = 0
+        return true
+    end
+    equipAttempts = equipAttempts + 1
+    if equipAttempts > MAX_EQUIP_ATTEMPTS then
+        equipAttempts = 0
+        return false
+    end
+    if character and character:FindFirstChild("Humanoid") then
+        local success, err = pcall(function()
+            character.Humanoid:EquipTool(rod)
+        end)
+        if success then
+            task.wait(0.5)
+            local _, nowEquipped = findFishingRod()
+            if nowEquipped then
+                equipAttempts = 0
+                return true
+            end
+        else
+            logError("equipRod", err)
+        end
+    end
+    return false
+end
+
+task.spawn(function()
+    while true do
+        pcall(function()
+            if isFishing then
+                local rod, equipped = findFishingRod()
+                if rod and not equipped then
+                    equipRod()
+                end
+            end
+        end)
+        task.wait(INSTANT_EQUIP_RETRY)
+    end
+end)
+
+local function monitorRod(rod)
+    if not rod or rodMonitored == rod then return end
+    rodMonitored = rod
+    local success, err = pcall(function()
+        rod:GetAttributeChangedSignal("minigame"):Connect(function()
+            task.wait(MINIGAME_BUFFER)
+            local success, isActive = pcall(function()
+                return rod:GetAttribute("minigame")
+            end)
+            if not success then return end
+            isMinigame = isActive
+            if isMinigame then
+                lastClickTime = 0
+                clickCount = 0
+                yieldCounter = 0
+                minigameStartTime = tick()
+            else
+                local hits = rod:GetAttribute("minigameHits") or 0
+                local total = rod:GetAttribute("minigameTotalHits") or 0
+                local minigameDuration = tick() - minigameStartTime
+                local clicksPerSec = minigameDuration > 0 and (clickCount / minigameDuration) or 0
+                minigameCount = minigameCount + 1
+                avgClicksPerMinigame = ((avgClicksPerMinigame * (minigameCount - 1)) + clickCount) / minigameCount
+                local caught = hits >= total
+                if caught then
+                    totalFishCaught = totalFishCaught + 1
+                else
+                    missedFish = missedFish + 1
+                end
+                logFishingAttempt(
+                    lastCastLuck > 0 and lastCastLuck or 1.0,
+                    minigameDuration,
+                    clickCount,
+                    clicksPerSec,
+                    hits,
+                    total,
+                    caught
+                )
+                clickCount = 0
+            end
+        end)
+    end)
+    if not success then
+        logError("monitorRod_minigame", err)
+    end
+    pcall(function()
+        rod:GetAttributeChangedSignal("casted"):Connect(function()
+            task.wait(MINIGAME_BUFFER)
+            if rod:GetAttribute("casted") then
+                successfulCasts = successfulCasts + 1
+            end
+        end)
+    end)
+    pcall(function()
+        rod.Unequipped:Connect(function()
+            rodMonitored = nil
+            task.spawn(function()
+                task.wait(0.5)
+                for i = 1, 30 do
+                    if equipRod() then break end
+                    task.wait(INSTANT_EQUIP_RETRY)
+                end
+            end)
+        end)
+    end)
+end
+
+task.spawn(function()
+    while true do
+        task.wait(MINIGAME_POLL_INTERVAL)
+        pcall(function()
+            if not isFishing then return end
+            local rod, equipped = findFishingRod()
+            if not rod or not equipped then return end
+            local inMinigame = rod:GetAttribute("minigame")
+            if inMinigame and not isMinigame then
+                isMinigame = true
+                lastClickTime = 0
+                clickCount = 0
+                yieldCounter = 0
+                minigameStartTime = tick()
+            end
+            if not inMinigame and isMinigame then
+                isMinigame = false
+                local hits = rod:GetAttribute("minigameHits") or 0
+                local total = rod:GetAttribute("minigameTotalHits") or 0
+                local minigameDuration = tick() - minigameStartTime
+                local clicksPerSec = minigameDuration > 0 and (clickCount / minigameDuration) or 0
+                minigameCount = minigameCount + 1
+                avgClicksPerMinigame = ((avgClicksPerMinigame * (minigameCount - 1)) + clickCount) / minigameCount
+                local caught = hits >= total
+                if caught then
+                    totalFishCaught = totalFishCaught + 1
+                else
+                    missedFish = missedFish + 1
+                end
+                logFishingAttempt(
+                    lastCastLuck > 0 and lastCastLuck or 1.0,
+                    minigameDuration,
+                    clickCount,
+                    clicksPerSec,
+                    hits,
+                    total,
+                    caught
+                )
+                clickCount = 0
+            end
+        end)
+    end
+end)
+
+local function clickMinigame()
+    pcall(function()
+        local rod = findFishingRod()
+        if not rod or not rod:GetAttribute("minigame") then
+            isMinigame = false
+            return
+        end
+        local currentTime = tick()
+        if currentTime - lastClickTime >= CLICK_INTERVAL then
+            lastClickTime = currentTime
+            if clickCount >= MAX_CLICKS_PER_MINIGAME then
+                isMinigame = false
+                return
+            end
+            for i = 1, CLICKS_PER_BURST do
+                clickCount = clickCount + 1
+                yieldCounter = yieldCounter + 1
+                FishingMinigameClick:FireServer()
+                if i < CLICKS_PER_BURST then
+                    task.wait(BURST_INTERVAL)
+                end
+            end
+            if yieldCounter >= YIELD_EVERY_N_CLICKS then
+                yieldCounter = 0
+                task.wait(0.035)
+            end
+        end
+    end)
+end
+
+local function preciseWait(duration)
+    if not duration or duration < 0 then return end
+    pcall(function()
+        task.wait(duration)
+    end)
+end
+
+local function calculatePerfectCastStartTime()
+    local currentTime = tick()
+    local cyclePosition = currentTime % LUCK_CYCLE
+    local targetActivationTime = FIRST_PEAK_TIME - TOTAL_START_COMP
+    while targetActivationTime < 0 do
+        targetActivationTime = targetActivationTime + LUCK_CYCLE
+    end
+    local waitTime
+    if cyclePosition <= targetActivationTime then
+        waitTime = targetActivationTime - cyclePosition
+    else
+        waitTime = (LUCK_CYCLE - cyclePosition) + targetActivationTime
+    end
+    return waitTime, targetActivationTime, cyclePosition
+end
+
+local function castRod()
+    local rod, equipped = findFishingRod()
+    if not rod then return false end
+    if not equipped then return equipRod() end
+    local canCast = true
+    pcall(function()
+        if rod:GetAttribute("casted") then canCast = false end
+        if rod:GetAttribute("minigame") then canCast = false end
+        if rod:GetAttribute("castCooldown") then canCast = false end
+    end)
+    if not canCast then return false end
+    totalCasts = totalCasts + 1
+    lastCastTime = tick()
+    task.spawn(function()
+        local success, err = pcall(function()
+            local waitTime = calculatePerfectCastStartTime()
+            if not waitTime or waitTime < 0 or waitTime > 2 then
+                pcall(function()
+                    rod:Activate()
+                end)
+                task.wait(0.2)
+                pcall(function()
+                    rod:Deactivate()
+                end)
+                task.wait(0.3)
+                pcall(function()
+                    FishingCast:FireServer(1.0)
+                end)
+                lastCastLuck = 1.0
+                return
+            end
+            if waitTime > 0 then
+                preciseWait(waitTime)
+            end
+            local clientActivateTime = tick()
+            local success = pcall(function()
+                rod:Activate()
+            end)
+            if not success then
+                return
+            end
+            task.wait(0.3)
+            preciseWait(PERFECT_HOLD_DURATION)
+            local clientDeactivateTime = tick()
+            local clientHoldDuration = clientDeactivateTime - clientActivateTime
+            local serverSeesValue = clientHoldDuration % LUCK_CYCLE
+            local luckMultiplier
+            if serverSeesValue < 0.5 then
+                luckMultiplier = 1 + serverSeesValue
+            else
+                luckMultiplier = 2 - serverSeesValue
+            end
+            lastCastLuck = luckMultiplier
+            pcall(function()
+                rod:Deactivate()
+            end)
+            task.wait(0.3)
+            local castSuccess = pcall(function()
+                FishingCast:FireServer(1.0)
+            end)
+            if not castSuccess then
+                return
+            end
+            task.wait(0.5)
+            local castRegistered = verifyAttributeChange(rod, "casted", true, 5)
+            local timingError = math.abs(clientHoldDuration - FIRST_PEAK_TIME)
+            table.insert(timingErrors, timingError)
+            if #timingErrors > 50 then
+                table.remove(timingErrors, 1)
+            end
+            local sum = 0
+            for _, err in ipairs(timingErrors) do
+                sum = sum + err
+            end
+            avgTimingError = sum / #timingErrors
+        end)
+        if not success then
+            logError("castRod", err)
+            pcall(function()
+                rod:Deactivate()
+            end)
+            task.wait(1)
+        end
+    end)
+    return true
+end
+
+local function ensureRodEquipped()
+    if tick() - lastRodCheck < REEQUIP_CHECK_INTERVAL then
+        return true
+    end
+    lastRodCheck = tick()
+    local rod, equipped = findFishingRod()
+    if not rod then return false end
+    if not equipped then
+        return equipRod()
+    end
+    if rodMonitored ~= rod then
+        monitorRod(rod)
+    end
+    return true
+end
+
+local function fishingLoop()
+    isFishing = true
+    local loopCount = 0
+    while isFishing do
+        loopCount = loopCount + 1
+        local success, err = pcall(function()
+            ensureRodEquipped()
+            local rod, equipped = findFishingRod()
+            if not rod or not equipped then
+                task.wait(REEQUIP_CHECK_INTERVAL)
+                return
+            end
+            local inMinigame = rod:GetAttribute("minigame")
+            local isCasted = rod:GetAttribute("casted")
+            local onCooldown = rod:GetAttribute("castCooldown")
+            if inMinigame or isMinigame then
+                isMinigame = true
+                clickMinigame()
+                return
+            end
+            if not isCasted and not inMinigame and not onCooldown then
+                if castRod() then
+                    task.wait(CAST_COMPLETE_WAIT)
+                else
+                    task.wait(0.5)
+                end
+                return
+            end
+            if onCooldown then
+                task.wait(COOLDOWN_CHECK_WAIT)
+            elseif isCasted then
+                task.wait(BITE_WAIT)
+            else
+                task.wait(0.5)
+            end
+        end)
+        if not success then
+            logError("fishingLoop", err)
+            task.wait(1)
+        end
+    end
+end
+
+local function startFishing()
+    if isFishing then
+        return
+    end
+    sessionStartTime = tick()
+    local rod, equipped = findFishingRod()
+    if not rod then
+        return
+    end
+    if not equipped then
+        for i = 1, 20 do
+            if equipRod() then
+                break
+            end
+            task.wait(0.5)
+        end
+    end
+    fishingLoop()
+end
+
+player.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    backpack = player:WaitForChild("Backpack")
+    rodMonitored = nil
+    equipAttempts = 0
+    if isFishing then
+        task.wait(2)
+        for i = 1, 30 do
+            if equipRod() then
+                break
+            end
+            task.wait(0.5)
+        end
+    end
+end)
+
+task.spawn(function()
+    task.wait(3)
+    local rod, equipped = findFishingRod()
+    if rod then
+        task.wait(2)
+        startFishing()
+        task.spawn(function()
+            while true do
+                task.wait(60)
+            end
+        end)
+    else
+        warn("No fishing rod found!")
+    end
+end)
