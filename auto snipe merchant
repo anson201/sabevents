@@ -1,4 +1,4 @@
-setfpscap(5)
+setfpscap(7)
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
