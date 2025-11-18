@@ -1,0 +1,113 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+local player = Players.LocalPlayer
+
+local Net = require(ReplicatedStorage.Packages.Net)
+local Synchronizer = require(ReplicatedStorage.Packages.Synchronizer)
+
+local playerData = Synchronizer:Wait(player)
+
+local spinRemote = ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Net"):WaitForChild("RE/RadioactiveEventService/Spin")
+
+local CHECK_INTERVAL = 60
+local SPIN_ATTEMPT_INTERVAL = 0.5
+local MAX_CONSECUTIVE_SPINS = 200
+
+local isRunning = false
+local totalSpins = 0
+
+local function getAvailableSpins()
+    local spinData = playerData:Get("RadioactiveSpinWheel")
+    
+    if not spinData then
+        return 0
+    end
+    
+    local spins = spinData.Spins or spinData.SpinsAvailable or spinData.Count or 0
+    
+    return tonumber(spins) or 0
+end
+
+local function canSpin()
+    local spins = getAvailableSpins()
+    return spins > 0, spins
+end
+
+local function spinWheel()
+    local success, err = pcall(function()
+        spinRemote:FireServer()
+    end)
+    
+    if success then
+        totalSpins = totalSpins + 1
+        return true
+    else
+        return false
+    end
+end
+
+local function tryUseAllSpins()
+    local spinsUsed = 0
+    local spinsBefore = getAvailableSpins()
+    
+    if spinsBefore == 0 then
+        return 0
+    end
+    
+    for attempt = 1, MAX_CONSECUTIVE_SPINS do
+        local currentSpins = getAvailableSpins()
+        
+        if currentSpins == 0 then
+            break
+        end
+        
+        if spinWheel() then
+            spinsUsed = spinsUsed + 1
+            
+            task.wait(SPIN_ATTEMPT_INTERVAL)
+            
+            local spinsAfter = getAvailableSpins()
+            if spinsAfter < currentSpins then
+                print("Spin successful!")
+            end
+        else
+            task.wait(SPIN_ATTEMPT_INTERVAL * 2)
+        end
+        
+        if attempt >= MAX_CONSECUTIVE_SPINS then
+            break
+        end
+    end
+    
+    return spinsUsed
+end
+
+local function autoSpinLoop()
+    isRunning = true
+    
+    while isRunning do
+        pcall(function()
+            local hasSpins, spinCount = canSpin()
+            
+            if hasSpins then
+                tryUseAllSpins()
+            end
+        end)
+        
+        task.wait(CHECK_INTERVAL)
+    end
+end
+
+local function startAutoSpin()
+    if isRunning then
+        return
+    end
+    
+    autoSpinLoop()
+end
+
+task.spawn(function()
+    task.wait(5)
+    startAutoSpin()
+end)
