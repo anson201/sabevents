@@ -1,0 +1,166 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local backpack = player:WaitForChild("Backpack")
+
+local Net = require(ReplicatedStorage.Packages.Net)
+local FishingCast = Net:RemoteEvent("FishingRod.Cast")
+local FishingMinigameClick = Net:RemoteEvent("FishingRod.MinigameClick")
+
+local TARGET_LUCK = 1.5
+local LUCK_CYCLE = 1.0
+local FIRST_PEAK_TIME = 0.425
+local TOTAL_START_COMP = 0.650
+local PERFECT_HOLD_DURATION = 0.025
+
+local CLICK_INTERVAL = 0.005
+local CAST_CYCLE_TIME = 12
+
+local isFishing = false
+local totalCasts = 0
+
+local function findFishingRod()
+    if character then
+        for _, tool in pairs(character:GetChildren()) do
+            if tool:IsA("Tool") and (tool.Name:lower():find("rod") or tool.Name:lower():find("fish")) then
+                return tool, true
+            end
+        end
+    end
+    for _, tool in pairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") and (tool.Name:lower():find("rod") or tool.Name:lower():find("fish")) then
+            return tool, false
+        end
+    end
+    return nil, false
+end
+
+local function equipRod()
+    local rod, equipped = findFishingRod()
+    if not rod or equipped then return equipped end
+    if character and character:FindFirstChild("Humanoid") then
+        pcall(function()
+            character.Humanoid:EquipTool(rod)
+        end)
+        task.wait(0.3)
+        local _, nowEquipped = findFishingRod()
+        return nowEquipped
+    end
+    return false
+end
+
+local function calculatePerfectCastStartTime()
+    local currentTime = tick()
+    local cyclePosition = currentTime % LUCK_CYCLE
+    local targetActivationTime = FIRST_PEAK_TIME - TOTAL_START_COMP
+    while targetActivationTime < 0 do
+        targetActivationTime = targetActivationTime + LUCK_CYCLE
+    end
+    local waitTime
+    if cyclePosition <= targetActivationTime then
+        waitTime = targetActivationTime - cyclePosition
+    else
+        waitTime = (LUCK_CYCLE - cyclePosition) + targetActivationTime
+    end
+    return waitTime
+end
+
+local function castWithLuck()
+    local rod = findFishingRod()
+    if not rod then return false, 0 end
+    local luckMultiplier = 0
+
+    local success, err = pcall(function()
+        local waitTime = calculatePerfectCastStartTime()
+        if not waitTime or waitTime < 0 or waitTime > 2 then
+            rod:Activate()
+            task.wait(0.1)
+            rod:Deactivate()
+            task.wait(0.2)
+            FishingCast:FireServer(1.0)
+            luckMultiplier = 1.0
+            return
+        end
+        if waitTime > 0 then task.wait(waitTime) end
+
+        local clientActivateTime = tick()
+        rod:Activate()
+        task.wait(0.1)
+        task.wait(PERFECT_HOLD_DURATION)
+
+        local clientDeactivateTime = tick()
+        local clientHoldDuration = clientDeactivateTime - clientActivateTime
+        local serverSeesValue = clientHoldDuration % LUCK_CYCLE
+        if serverSeesValue < 0.5 then
+            luckMultiplier = 1 + serverSeesValue
+        else
+            luckMultiplier = 2 - serverSeesValue
+        end
+
+        rod:Deactivate()
+        task.wait(0.2)
+        FishingCast:FireServer(1.0)
+    end)
+
+    if not success then
+        luckMultiplier = 0
+    end
+    return success, luckMultiplier
+end
+
+local function clickForDuration(duration)
+    local startTime = tick()
+    while tick() - startTime < duration do
+        pcall(function()
+            FishingMinigameClick:FireServer()
+        end)
+        task.wait(CLICK_INTERVAL)
+    end
+end
+
+local function fishingLoop()
+    isFishing = true
+    while isFishing do
+        pcall(function()
+            local rod, equipped = findFishingRod()
+            if not rod then task.wait(2) return end
+            if not equipped then equipRod() task.wait(1) return end
+
+            totalCasts += 1
+            castWithLuck()
+            clickForDuration(CAST_CYCLE_TIME)
+            task.wait(0.5)
+        end)
+    end
+end
+
+local function startFishing()
+    if isFishing then return end
+    for _ = 1, 10 do
+        if equipRod() then break end
+        task.wait(0.3)
+    end
+    fishingLoop()
+end
+
+task.spawn(function()
+    while true do
+        task.wait(60)
+    end
+end)
+
+task.spawn(function()
+    task.wait(2)
+    local rod = findFishingRod()
+    if rod then
+        task.wait(1)
+        startFishing()
+    end
+end)
+
+_G.startFishing = startFishing
+_G.stopFishing = function()
+    isFishing = false
+end
