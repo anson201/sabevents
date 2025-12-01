@@ -1,0 +1,40 @@
+--advent calender
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local claimRemote = ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Net"):WaitForChild("RF/AdventService/ClaimReward")
+
+local TOTAL_DAYS = 25
+local CHECK_INTERVAL = 24 * 60 * 60 -- 24 hours in seconds
+
+local function attemptClaimAllDays()
+    print("started")
+    
+    for day = 1, TOTAL_DAYS do
+        local success, result = pcall(function()
+            return claimRemote:InvokeServer("Calendar", day)
+        end)
+        
+        if success then
+            if result then
+                print(string.format("success Day %d claimed", day))
+            else
+                print(string.format("failed Day %d", day))
+            end
+        else
+            warn(string.format("something went wrong?? Day %d: %s", day, tostring(result)))
+        end
+        
+        task.wait(0.5)
+    end
+    
+    print("completed sleep 24 hrs")
+end
+
+print("started")
+attemptClaimAllDays()
+
+--repeat every 24 hrs
+while true do
+    task.wait(CHECK_INTERVAL)
+    attemptClaimAllDays()
+end
