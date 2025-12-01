@@ -1,0 +1,135 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+
+local WEBHOOK_URL = "putyowebhook"
+local player = Players.LocalPlayer
+
+local AnimalController = require(ReplicatedStorage.Controllers.AnimalController)
+
+local VirtualUser = game:GetService("VirtualUser")
+player.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
+
+local function sendWebhook(message, rarity)
+    local rarityColor = 65280 -- Default green
+    
+    if rarity then
+        local rarityLower = rarity:lower()
+        if rarityLower:find("mythic") or rarityLower:find("legendary") then
+            rarityColor = 16711680 -- Red
+        elseif rarityLower:find("epic") then
+            rarityColor = 10181046 -- Purple
+        elseif rarityLower:find("rare") then
+            rarityColor = 3447003 -- Blue
+        elseif rarityLower:find("uncommon") then
+            rarityColor = 5763719 -- Green
+        end
+    end
+    
+    local fields = {
+        {
+            ["name"] = "Username",
+            ["value"] = player.Name,
+            ["inline"] = true
+        },
+        {
+            ["name"] = "Time Found",
+            ["value"] = os.date("%X"),
+            ["inline"] = true
+        }
+    }
+    
+    if rarity then
+        table.insert(fields, {
+            ["name"] = "Rarity",
+            ["value"] = rarity,
+            ["inline"] = true
+        })
+    end
+    
+    local data = {
+        ["content"] = message,
+        ["username"] = "Gobblino Finder",
+        ["embeds"] = {{
+            ["title"] = "Gobblino Uniciclino Found!",
+            ["description"] = "Account: **" .. player.Name .. "**" .. (rarity and "\nRarity: **" .. rarity .. "**" or ""),
+            ["color"] = rarityColor,
+            ["timestamp"] = os.date("!%Y-%m-%dT%H:%M:%S"),
+            ["fields"] = fields
+        }}
+    }
+    
+    pcall(function()
+        request({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = HttpService:JSONEncode(data)
+        })
+    end)
+end
+
+local alreadyFound = {}
+
+local function checkAnimals()
+    local animals = AnimalController:GetAnimals()
+    
+    for animalId, animalData in pairs(animals) do
+        if animalData.AnimalModel and animalData.AnimalModel.Name == "Gobblino Uniciclino" then
+            if not alreadyFound[animalId] then
+                local rarity = nil
+                
+                if animalData.Rarity then
+                    rarity = animalData.Rarity
+                elseif animalData.AnimalModel:FindFirstChild("Rarity") then
+                    rarity = animalData.AnimalModel.Rarity.Value or animalData.AnimalModel.Rarity.Text
+                end
+                
+                local billboard = animalData.AnimalModel:FindFirstChild("AnimalOverhead", true)
+                if billboard and billboard:IsA("BillboardGui") then
+                    for _, child in pairs(billboard:GetDescendants()) do
+                        if child:IsA("TextLabel") and child.Text then
+                            local text = child.Text
+                            if text:find("Common") or text:find("Uncommon") or text:find("Rare") or 
+                               text:find("Epic") or text:find("Legendary") or text:find("Mythic") then
+                                rarity = text:match("(%a+)") -- Extract the rarity word
+                                break
+                            end
+                        end
+                    end
+                end
+                
+                print("✅ FOUND: Gobblino Uniciclino (ID:", animalId, ")")
+                if rarity then
+                    print("   Rarity:", rarity)
+                else
+                    print("   Rarity: Unknown (checking data structure...)")
+                    -- Debug: print the entire animalData structure
+                    for key, value in pairs(animalData) do
+                        print("   Data:", key, "=", tostring(value))
+                    end
+                end
+                
+                sendWebhook("🦃 **Gobblino Uniciclino found!**\nAccount: " .. player.Name .. (rarity and "\nRarity: " .. rarity or ""), rarity)
+                alreadyFound[animalId] = true
+            end
+        end
+    end
+end
+spawn(function()
+    while true do
+        task.wait(1)
+        checkAnimals()
+    end
+end)
+
+-- Also check immediately
+checkAnimals()
+
+print("✅ Monitoring active! Will show rarity if available")
