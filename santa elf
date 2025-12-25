@@ -1,0 +1,137 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local player = Players.LocalPlayer
+
+local WAIT_TIME = 15
+local SPAM_DURATION = 60
+local totalElfsSeen = 0
+local activeSpamThread = nil
+local originalRequire = require
+local vim = game:GetService("VirtualInputManager")
+
+local function holdE(duration, elfNumber)
+    -- Cancel any existing hold thread
+    if activeSpamThread then
+        task.cancel(activeSpamThread)
+    end
+
+    activeSpamThread = task.spawn(function()
+        local startTime = os.clock()
+        local endTime = startTime + duration
+        local holdCycles = 0
+
+        while os.clock() < endTime do
+            vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+            task.wait(1.2)
+            vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+            holdCycles = holdCycles + 1
+            task.wait(0.2)
+        end
+
+        print("[Elf #" .. elfNumber .. "] " .. holdCycles .. " cycles")
+        activeSpamThread = nil
+        task.spawn(buySantaMerchantItem)
+    end)
+end
+
+function buySantaMerchantItem()
+    pcall(function()
+        local Datas = ReplicatedStorage:WaitForChild("Datas", 5)
+        if not Datas then return end
+        local Shared = ReplicatedStorage:WaitForChild("Shared", 5)
+        if not Shared then return end
+        local Packages = ReplicatedStorage:WaitForChild("Packages", 5)
+        if not Packages then return end
+
+        local SantaMerchantData = require(Datas.SantaMerchantData)
+        local Animals = require(Shared.Animals)
+        local Net = require(Packages.Net)
+
+        local function getGeneration(name)
+            local s, g = pcall(function() return Animals:GetGeneration(name) end)
+            return s and g or 0
+        end
+
+        local function getStock(name)
+            return ReplicatedStorage:GetAttribute("SantaMerchant_" .. string.gsub(name, "%s", "_")) or 0
+        end
+
+        local best = nil
+        local highestGen = 0
+
+        for i, item in ipairs(SantaMerchantData.Brainrots) do
+            local gen = getGeneration(item.Brainrot)
+            local stock = getStock(item.Brainrot)
+            if stock > 0 and gen > highestGen then
+                highestGen = gen
+                best = {Index = i, Name = item.Brainrot, Price = item.Price}
+            end
+        end
+
+        if best then
+            print("[Santa] " .. best.Name .. " (" .. best.Price .. " elves)")
+            local remote = Net:RemoteFunction("SantaMerchantService/Buy")
+            local s, r = pcall(function()
+                return remote:InvokeServer("2298b248-44dd-4a34-bbfe-e1174e8ae1b4", best.Index)
+            end)
+            if s and r then
+                print("[Santa] Bought " .. best.Name)
+            end
+        end
+    end)
+end
+
+local function setupGoldElfDetection()
+    local s, Net = pcall(function()
+        return originalRequire(ReplicatedStorage.Packages.Net)
+    end)
+    if not s or not Net then return false end
+
+    local s2, event = pcall(function()
+        return Net:RemoteEvent("GameService/SpawnEffect")
+    end)
+    if not s2 or not event then return false end
+
+    event.OnClientEvent:Connect(function(name, _, _, pos)
+        if not name then return end
+        local lower = string.lower(tostring(name))
+        if not (string.find(lower, "gold", 1, true) and string.find(lower, "elf", 1, true)) then
+            return
+        end
+
+        totalElfsSeen = totalElfsSeen + 1
+        local num = totalElfsSeen
+
+        local dist = "?"
+        pcall(function()
+            if pos and player.Character then
+                local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local p = typeof(pos) == "CFrame" and pos.Position or pos
+                    if typeof(p) == "Vector3" then
+                        dist = math.floor((hrp.Position - p).Magnitude)
+                    end
+                end
+            end
+        end)
+
+        print("[Elf #" .. num .. "] " .. dist .. " studs - waiting " .. WAIT_TIME .. "s")
+
+        task.spawn(function()
+            task.wait(WAIT_TIME)
+            holdE(SPAM_DURATION, num)
+        end)
+    end)
+
+    return true
+end
+
+local start = os.clock()
+while not game:IsLoaded() and os.clock() - start < 30 do
+    task.wait(0.5)
+end
+task.wait(1)
+
+if setupGoldElfDetection() then
+    print("[Ready] Elf collector + Santa buyer")
+end
