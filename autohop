@@ -1,0 +1,662 @@
+-- << config
+
+getgenv().Config = getgenv().Config or {
+    Webhook_1m_10m = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
+    Webhook_10m_100m = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
+    Webhook_100m_500m = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
+    Webhook_500m_plus = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
+    HighlightWebhook = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
+    TrackWebhook = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
+    GetServerAPI = "https://vectorbot.vercel.app/api/getServer", -- << api here for server hopping
+}
+
+-- << Code starts from here
+
+repeat task.wait() until game:IsLoaded()
+
+-- << optimizator (if u wanna check it,it's opensourced)
+pcall(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/lelel22f/fps/refs/heads/main/fps"))() end)
+
+-- << timeout just incase
+local TS=game:GetService("TeleportService")
+task.delay(40,function()
+	TS:Teleport(game.PlaceId)
+end)
+
+-- // shit exec fix
+local rep = game:GetService("ReplicatedStorage")
+local cache = {}
+setthreadidentity(8)
+cache.Animals = require(rep.Shared.Animals)
+cache.AnimalData = require(rep.Datas.Animals)
+cache.Synchronizer = require(rep.Packages.Synchronizer)
+setthreadidentity(2)
+shared.Modules = cache
+
+-- // cfg var, u remove - script break
+local cfg = getgenv().Config
+
+-- // services
+local http = game:GetService("HttpService")
+local tp = game:GetService("TeleportService")
+local plrs = game:GetService("Players")
+local collection = game:GetService("CollectionService")
+local TeleportService = game:GetService("TeleportService")
+local CoreGui = game:GetService("CoreGui")
+
+-- // vars
+local me = plrs.LocalPlayer
+local animalModule = shared.Modules.Animals
+local animalData = shared.Modules.AnimalData
+local sync = shared.Modules.Synchronizer
+local rejoining = false
+local hopping = false
+local lastHopTime = 0
+local MIN_HOP_DELAY = 3
+local scanning = false
+local cachedHtml = nil
+local cacheLoaded = false
+local cacheLoading = false
+
+-- // bots shit
+local statsFile = "bot_" .. me.UserId .. ".json"
+local stats
+
+local function loadStats()
+    local def = {scanned = 0, found = 0, started = os.time(), skip = {}, brainrots = {}}
+    if isfile(statsFile) then
+        local ok, data = pcall(http.JSONDecode, http, readfile(statsFile))
+        if ok and data and type(data) == "table" then
+            data.scanned = data.scanned or 0
+            data.found = data.found or 0
+            data.started = data.started or os.time()
+            data.skip = data.skip or {}
+            data.brainrots = data.brainrots or {}
+            return data
+        end
+        pcall(delfile, statsFile)
+    end
+    return def
+end
+
+local function saveStats()
+    if not stats then return end
+    local clean = {
+        scanned = stats.scanned,
+        found = stats.found,
+        started = stats.started,
+        brainrots = stats.brainrots,
+        skip = {}
+    }
+    local currentTime = os.time()
+    for id, time in pairs(stats.skip) do
+        if currentTime - time < 3600 then clean.skip[id] = time end
+    end
+    pcall(writefile, statsFile, http:JSONEncode(clean))
+end
+
+stats = loadStats()
+
+-- << do not touch anything below if you don't know what you're doing
+print(game.JobId)
+
+local function fmt(num)
+    if num >= 1e9 then return string.format("%.1fB", num / 1e9)
+    elseif num >= 1e6 then return string.format("%.1fM", num / 1e6)
+    elseif num >= 1e3 then return string.format("%.1fK", num / 1e3) end
+    return tostring(math.floor(num))
+end
+
+local function timeStr(sec)
+    return string.format("%dh %dm", math.floor(sec / 3600), math.floor((sec % 3600) / 60))
+end
+
+local function getColor(val, og)
+    if og then return 16744192 end
+    if val >= 500000000 then return 3447003
+    elseif val >= 100000000 then return 5793266
+    elseif val >= 10000000 then return 8311585
+    else return 10070709 end
+end
+
+local function pickWebhook(val)
+    if val >= 500000000 then return cfg.Webhook_500m_plus
+    elseif val >= 100000000 then return cfg.Webhook_100m_500m
+    elseif val >= 10000000 then return cfg.Webhook_10m_100m
+    else return cfg.Webhook_1m_10m end
+end
+
+local function getImageUrl(petName)
+    if not cachedHtml then 
+        return nil 
+    end
+    
+    local patterns = {
+        'title="' .. petName .. '">.-<img[^>]-src="([^"]+)"',
+        'title="' .. petName .. '">.-<img[^>]-data%-src="([^"]+)"',
+        
+        'alt="' .. petName .. '"[^>]-src="([^"]+)"',
+        'alt="' .. petName .. '"[^>]-data%-src="([^"]+)"',
+        
+        '<a[^>]-title="' .. petName .. '"[^>]->.-<img[^>]-src="([^"]+)"',
+        '<a[^>]-title="' .. petName .. '"[^>]->.-<img[^>]-data%-src="([^"]+)"',
+        
+        'data%-image%-name="' .. petName .. '"[^>]-href="([^"]+)"',
+        'data%-image%-key="' .. petName .. '"[^>]-href="([^"]+)"',
+    }
+    
+    for _, pattern in ipairs(patterns) do
+        local imageUrl = cachedHtml:match(pattern)
+        if imageUrl and not imageUrl:match("^data:image") and imageUrl:match("^http") then
+            return imageUrl
+        end
+    end
+
+    local escapedName = petName:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
+    if escapedName ~= petName then
+        for _, pattern in ipairs(patterns) do
+            local escapedPattern = pattern:gsub(petName, escapedName)
+            local imageUrl = cachedHtml:match(escapedPattern)
+            if imageUrl and not imageUrl:match("^data:image") and imageUrl:match("^http") then
+                return imageUrl
+            end
+        end
+    end
+
+    return nil
+end
+
+local function loadHtmlCache()
+    if cacheLoaded or cacheLoading then return cacheLoaded end
+    cacheLoading = true
+    
+    for attempt = 1, 5 do
+        local success, result = pcall(function()
+            return game:HttpGet("https://stealabrainrot.fandom.com/wiki/Brainrots", true)
+        end)
+        
+        if success and result and #result > 1000 then
+            cachedHtml = result
+            cacheLoaded = true
+            cacheLoading = false
+            return true
+        end
+        
+        if attempt < 5 then
+            task.wait(1 + (attempt * 0.5))
+        end
+    end
+    
+    cacheLoading = false
+    return false
+end
+
+local specialNames = {
+    ["Nuclearo Dinossauro"] = true, ["Money Money Puggy"] = true, ["Tang Tang Kelentang"] = true,
+    ["Ketupat Kepat"] = true, ["Tictac Sahur"] = true, ["Ketchuru and Musturu"] = true,
+    ["Garama and Madundung"] = true, ["Tacorita Bicicleta"] = true, ["Chipso and Queso"] = true,
+    ["Chillin Chili"] = true, ["Tralaledon"] = true, ["W or L"] = true, ["La Jolly Grande"] = true,
+    ["Los Primos"] = true, ["Eviledon"] = true, ["La Taco Combinasion"] = true, ["Orcaledon"] = true,
+    ["Spaghetti Tualetti"] = true, ["La Secret Combinasion"] = true, ["Los Hotspotsitos"] = true,
+    ["La Supreme Combinasion"] = true, ["Celularcini Viciosini"] = true, ["Los Tacoritas"] = true,
+    ["Spooky and Pumpky"] = true, ["Headless Horseman"] = true, ["Los Puggies"] = true,
+    ["Los Spaghettis"] = true, ["Fragrama and Chocrama"] = true, ["Cooki and Milki"] = true,
+    ["La Ginger Sekolah"] = true, ["Tang Tang Keletang"] = true, ["Chimnino"] = true,
+    ["Ginger Gerat"] = true, ["Festive 67"] = true, ["Money Money Reindeer"] = true, ["Lavadorito Spinito"] = true,
+}
+
+local function sendHighlight(data)
+    if not cfg.HighlightWebhook or cfg.HighlightWebhook == "" then return end
+    
+    local filtered = {}
+    for _, v in ipairs(data.pets) do
+        if v.gen >= 100000000 or specialNames[v.name] then
+            table.insert(filtered, v)
+        end
+    end
+    
+    if #filtered == 0 then return end
+    
+    local grouped = {}
+    for _, v in ipairs(filtered) do
+        local key = v.name .. "|" .. v.gen
+        local g = grouped[key]
+        if g then
+            g.count = g.count + 1
+        else
+            grouped[key] = {count = 1, data = v}
+        end
+    end
+    
+    local entries = {}
+    for _, g in pairs(grouped) do
+        local prefix = g.count > 1 and g.count .. "x " or ""
+        entries[#entries + 1] = prefix .. g.data.name .. " - $" .. fmt(g.data.gen) .. "/s"
+    end
+    
+    local image_url = getImageUrl(data.pets[1].name)
+    
+    local embed = {
+        title = data.og and "[★] Sab Notifier - OG" or "[★] Sab Notifier - Secret",
+        description = "**" .. data.pets[1].name .. "** - $" .. fmt(data.best) .. "/s",
+        color = 15844367,
+        fields = {
+            {name = "Brainrot(-s):", value = "```" .. table.concat(entries, "\n") .. "```", inline = false},
+            {name = "Sab Notifier", value = "[Join Discord](ur dc link here)", inline = true}
+        },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%S")
+    }
+    
+    if image_url then embed.thumbnail = {url = image_url} end
+    
+    local success, err = pcall(function()
+        request({
+            Url = cfg.HighlightWebhook,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = http:JSONEncode({embeds = {embed}})
+        })
+    end)
+    
+    if not success then
+        task.wait(0.5)
+        pcall(function()
+            request({
+                Url = cfg.HighlightWebhook,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = http:JSONEncode({embeds = {embed}})
+            })
+        end)
+    end
+end
+
+local function notify(data)
+    local hook = pickWebhook(data.best)
+    if not hook or hook == "" then return end
+    
+    local grp = {}
+    for _, v in ipairs(data.pets) do
+        local k = v.owner .. "|" .. v.name .. "|" .. v.gen
+        local g = grp[k]
+        if g then
+            g.count = g.count + 1
+        else
+            grp[k] = {count = 1, data = v}
+        end
+    end
+    
+    local list = {}
+    for _, g in pairs(grp) do
+        local v = g.data
+        local pre = g.count > 1 and g.count .. "x " or ""
+        local str = pre .. v.name .. " - $" .. fmt(v.gen) .. "/s"
+        if v.owner ~= data.owner then str = str .. " (OWNER: " .. v.owner .. ")" end
+        list[#list + 1] = str
+    end
+    
+    local title = data.og and "# [⟡] Sab Notifier - New OG Brainrot!" or "# [⟡] Sab Notifier - New Secret Brainrot!"
+    local script = 'game:GetService("TeleportService"):TeleportToPlaceInstance(' .. game.PlaceId .. ', "' .. game.JobId .. '", game.Players.LocalPlayer)'
+    local link = "https://fern.wtf/joiner?placeId=" .. game.PlaceId .. "&gameInstanceId=" .. game.JobId
+
+    local image_url = nil
+    if cacheLoaded then
+        image_url = getImageUrl(data.pets[1].name)
+
+        if not image_url then
+            cachedHtml = nil
+            cacheLoaded = false
+            if loadHtmlCache() then
+                image_url = getImageUrl(data.pets[1].name)
+            end
+        end
+    else
+        if loadHtmlCache() then
+            image_url = getImageUrl(data.pets[1].name)
+        end
+    end
+    
+    local embed = {
+        description = title .. "\n```fix\n" .. data.pets[1].name .. " - $" .. fmt(data.best) .. "/s\n```",
+        color = getColor(data.best, data.og),
+        fields = {
+            {name = "Brainrot Owner:", value = "```" .. data.owner .. "```", inline = true},
+            {name = "Players In Server:", value = "```" .. #plrs:GetPlayers() .. "```", inline = true},
+            {name = "Brainrot(-s):", value = "```\n" .. table.concat(list, "\n") .. "\n```", inline = false},
+            {name = "Script To Join:", value = "```lua\n" .. script .. "\n```", inline = false},
+            {name = "Link To Join:", value = "[Click Here To Join](" .. link .. ")", inline = false},
+            {name = "Sab Discord:", value = "[Join Our Discord](ur dc link here)", inline = false}
+        },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%S"),
+        footer = {text = "Sab Notifier V1.0"}
+    }
+    
+    if image_url then 
+        embed.thumbnail = {url = image_url}
+    end
+    
+    local payload = {embeds = {embed}}
+    if data.og or data.best >= 1000000000 then payload.content = "@here" end
+    
+    pcall(request, {Url = hook, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = http:JSONEncode(payload)})
+    
+    sendHighlight(data)
+end
+
+local function sendStats()
+    if not cfg.TrackWebhook or cfg.TrackWebhook == "" then return end
+    local curr = loadStats()
+    local rt = os.time() - curr.started
+    local blist = ""
+    
+    if curr.brainrots and #curr.brainrots > 0 then
+        blist = "Brainrots Found:\n\n"
+        for i, b in ipairs(curr.brainrots) do
+            blist = blist .. i .. ". " .. b .. "\n"
+        end
+    else
+        blist = "No brainrots found yet."
+    end
+    
+    local boundary = "----WebKitFormBoundary" .. os.time()
+    local body = "--" .. boundary .. "\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n" ..
+        http:JSONEncode({embeds = {{
+            title = "Bot Stats - " .. me.Name,
+            color = 5814783,
+            fields = {
+                {name = "Bot Name", value = "```" .. me.Name .. "```", inline = true},
+                {name = "Servers Scanned", value = "```" .. curr.scanned .. "```", inline = true},
+                {name = "Brainrots Found", value = "```" .. curr.found .. "```", inline = true},
+                {name = "Runtime", value = "```" .. timeStr(rt) .. "```", inline = false}
+            },
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%S"),
+            footer = {text = "Sab notifier bots"}
+        }}}) .. "\r\n--" .. boundary .. "\r\nContent-Disposition: form-data; name=\"files[0]\"; filename=\"brainrots.txt\"\r\nContent-Type: text/plain\r\n\r\n" .. 
+        blist .. "\r\n--" .. boundary .. "--\r\n"
+    
+    pcall(request, {
+        Url = cfg.TrackWebhook,
+        Method = "POST",
+        Headers = {["Content-Type"] = "multipart/form-data; boundary=" .. boundary},
+        Body = body
+    })
+end
+
+local function checkBase(base, results, checked)
+    local id = base.Name
+    if checked[id] or not base:GetAttribute("Loaded") then return end
+    checked[id] = true
+    
+    local ok, ch = pcall(sync.Wait, sync, id)
+    if not ok or not ch then
+        checked[id] = nil
+        return
+    end
+    
+    local owner = ch:Get("Owner")
+    if not owner or owner == me then return end
+    
+    local pets = ch:Get("AnimalList")
+    if not pets then return end
+    
+    for _, pet in pairs(pets) do
+        if type(pet) == "table" and pet ~= "Empty" then
+            local info = animalData[pet.Index]
+            local rarity = info and info.Rarity
+            if (rarity == "Secret" or rarity == "OG") and not pet.Steal and not pet.Machine then
+                local gen = animalModule:GetGeneration(pet.Index, pet.Mutation, pet.Traits, owner)
+                if gen >= 1000000 then
+                    results[#results + 1] = {
+                        owner = owner.Name,
+                        name = pet.Index,
+                        rarity = rarity,
+                        gen = gen,
+                        mut = pet.Mutation,
+                        traits = pet.Traits
+                    }
+                end
+            end
+        end
+    end
+end
+
+local function scan()
+    if scanning then return nil end
+    scanning = true
+    local results = {}
+    local checked = {}
+    local bases = collection:GetTagged("Plot")
+    local count = #bases
+    local playerCnt = #plrs:GetPlayers()
+    local batch = playerCnt <= 3 and 5 or playerCnt <= 5 and 8 or 10
+    
+    for i = 1, count, batch do
+        for j = i, math.min(i + batch - 1, count) do
+            checkBase(bases[j], results, checked)
+        end
+    end
+    
+    stats.scanned = stats.scanned + 1
+    saveStats()
+    
+    if stats.scanned % 10 == 0 then
+        task.spawn(sendStats)
+    end
+    
+    if #results == 0 then return nil end
+    
+    table.sort(results, function(a, b)
+        if a.rarity == "OG" and b.rarity ~= "OG" then return true
+        elseif a.rarity ~= "OG" and b.rarity == "OG" then return false end
+        return a.gen > b.gen
+    end)
+    
+    local top = results[1]
+    local matches = {top}
+    if not stats.brainrots then stats.brainrots = {} end
+    stats.brainrots[#stats.brainrots + 1] = top.rarity .. " - " .. top.name .. " - $" .. fmt(top.gen) .. "/s (Owner: " .. top.owner .. ")"
+    
+    local minRange, maxRange
+    if top.gen >= 500000000 then
+        minRange, maxRange = 500000000, math.huge
+    elseif top.gen >= 100000000 then
+        minRange, maxRange = 100000000, 500000000
+    elseif top.gen >= 10000000 then
+        minRange, maxRange = 10000000, 100000000
+    else
+        minRange, maxRange = 1000000, 10000000
+    end
+    
+    for i = 2, #results do
+        if results[i].gen >= minRange and results[i].gen < maxRange then
+            matches[#matches + 1] = results[i]
+        end
+    end
+    
+    stats.found = stats.found + 1
+    saveStats()
+    
+    local data = {owner = top.owner, best = top.gen, og = top.rarity == "OG", pets = matches}
+    scanning = false
+    return data
+end
+
+function hop()
+    if hopping then 
+        return 
+    end
+    
+    local currentTime = tick()
+    local timeSinceLastHop = currentTime - lastHopTime
+    if timeSinceLastHop < MIN_HOP_DELAY then
+        local waitTime = MIN_HOP_DELAY - timeSinceLastHop
+        task.wait(waitTime)
+    end
+    
+    hopping = true
+    lastHopTime = tick()
+    
+    local placeId = game.PlaceId
+    local currentServerId = game.JobId
+    local maxAttempts = 5
+    
+    if not cfg.GetServerAPI or cfg.GetServerAPI == "" then
+        task.wait(0.5)
+        hopping = false
+        pcall(tp.Teleport, tp, placeId, me)
+        return
+    end
+    
+    local teleportConnection
+    local teleportFailed = false
+    local targetServerId = nil
+    
+    teleportConnection = tp.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+        if player == me then
+            teleportFailed = true
+        end
+    end)
+    
+    local function cleanup()
+        if teleportConnection then 
+            pcall(function() teleportConnection:Disconnect() end)
+            teleportConnection = nil
+        end
+        hopping = false
+    end
+    
+    local baseDelay = 0.2 + math.random() * 0.3
+    task.wait(baseDelay)
+    
+    for attempt = 1, maxAttempts do
+        teleportFailed = false
+        targetServerId = nil
+        
+        local getPayload = http:JSONEncode({
+            action = "get",
+            botId = tostring(me.UserId),
+            currentServerId = currentServerId
+        })
+        
+        local getSuccess, getResponse = pcall(request, {
+            Url = cfg.GetServerAPI,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = getPayload
+        })
+        
+        if getSuccess and getResponse and getResponse.StatusCode == 200 then
+            local parseSuccess, serverData = pcall(http.JSONDecode, http, getResponse.Body)
+            
+            if parseSuccess and serverData and serverData.serverId then
+                targetServerId = serverData.serverId
+                print(serverData.serverId)
+                task.wait(0.3)
+                
+                local tpSuccess = pcall(tp.TeleportToPlaceInstance, tp, placeId, serverData.serverId, me)
+                
+                if tpSuccess then
+                    task.wait(1)
+                    
+                    if teleportFailed then
+                        pcall(request, {
+                            Url = cfg.GetServerAPI,
+                            Method = "POST",
+                            Headers = {["Content-Type"] = "application/json"},
+                            Body = http:JSONEncode({
+                                action = "failed", 
+                                serverId = targetServerId, 
+                                botId = tostring(me.UserId)
+                            })
+                        })
+                        task.wait(0.5)
+                        continue
+                    end
+
+                    pcall(request, {
+                        Url = cfg.GetServerAPI,
+                        Method = "POST",
+                        Headers = {["Content-Type"] = "application/json"},
+                        Body = http:JSONEncode({
+                            action = "confirm", 
+                            serverId = targetServerId, 
+                            botId = tostring(me.UserId)
+                        })
+                    })
+                    
+                    cleanup()
+                    return
+                else
+                    pcall(request, {
+                        Url = cfg.GetServerAPI,
+                        Method = "POST",
+                        Headers = {["Content-Type"] = "application/json"},
+                        Body = http:JSONEncode({
+                            action = "failed", 
+                            serverId = targetServerId, 
+                            botId = tostring(me.UserId)
+                        })
+                    })
+                    task.wait(0.8)
+                end
+            end
+        elseif getSuccess and getResponse and getResponse.StatusCode == 404 then
+            task.wait(2 + math.random() * 2)
+        elseif getSuccess and getResponse and getResponse.StatusCode == 503 then
+            local backoff = math.min(1 * (2 ^ (attempt - 1)), 8) + math.random() * 0.5
+            task.wait(backoff)
+        else
+            task.wait(1 + math.random())
+        end
+    end
+    
+    cleanup()
+    task.wait(1)
+    pcall(tp.Teleport, tp, placeId, me)
+end
+
+local function rejoin()
+    if rejoining then return end
+    rejoining = true
+    task.wait(1.5)
+    pcall(TeleportService.Teleport, TeleportService, game.PlaceId, me)
+end
+
+local function rejoinwhenkickoooo()
+game:GetService("Players").PlayerRemoving: connect (function (plr)
+    if plr == game:GetService("Players").LocalPlayer then
+      game:GetService('TeleportService'):Teleport(game.PlaceId)
+    end
+end)
+end
+
+local function run()
+    if not cacheLoaded then
+        loadHtmlCache()
+    end
+    
+    local playerCount = #plrs:GetPlayers()
+    if playerCount <= 3 then
+        local waited = 0
+        local lastCount = playerCount
+        while waited < 3 and #plrs:GetPlayers() < 5 do
+            task.wait(0.1)
+            waited = waited + 0.1
+            local currentCount = #plrs:GetPlayers()
+            if currentCount > lastCount then break end
+            lastCount = currentCount
+        end
+    end
+    
+    local ok = pcall(function()
+        local result = scan()
+        if result then notify(result) end
+        task.wait(1)
+        hop()
+    end)
+    if not ok then hop() end
+end
+
+task.spawn(rejoinwhenkickoooo)
+loadHtmlCache()
+task.spawn(run)
