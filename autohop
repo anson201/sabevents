@@ -1,13 +1,13 @@
 -- << config
 
 getgenv().Config = getgenv().Config or {
-    Webhook_1m_10m = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
-    Webhook_10m_100m = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
-    Webhook_100m_500m = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
-    Webhook_500m_plus = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
-    HighlightWebhook = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
-    TrackWebhook = "https://discord.com/api/webhooks/1417865473567101069/QZZ0Zql6Y95jct0KQMAQYzxYgmzPexssStT7SQzR6zxatgtNqhGod2FD3HdBOrmAt_TH",
-    GetServerAPI = "https://vectorbot.vercel.app/api/getServer", -- << api here for server hopping
+    Webhook_1m_10m = "https://discord.com/api/webhooks/1417865473567101069/",
+    Webhook_10m_100m = "https://discord.com/api/webhooks/1417865473567101069/",
+    Webhook_100m_500m = "https://discord.com/api/webhooks/1417865473567101069/",
+    Webhook_500m_plus = "https://discord.com/api/webhooks/1417865473567101069/",
+    HighlightWebhook = "https://discord.com/api/webhooks/1417865473567101069/",
+    TrackWebhook = "https://discord.com/api/webhooks/1417865473567101069/",
+    GetServerAPI = "", -- << api here for server hopping
 }
 
 -- << Code starts from here
